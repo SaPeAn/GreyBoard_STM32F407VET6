@@ -69,10 +69,26 @@ void Error_Handler(void);
 #define DISP_MISO_GPIO_Port GPIOC
 #define DISP_MOSI_Pin GPIO_PIN_3
 #define DISP_MOSI_GPIO_Port GPIOC
+#define SPI1_CS_Pin GPIO_PIN_4
+#define SPI1_CS_GPIO_Port GPIOA
+#define TOUCH_CS_Pin GPIO_PIN_4
+#define TOUCH_CS_GPIO_Port GPIOC
+#define TOUCH_IRQ_Pin GPIO_PIN_5
+#define TOUCH_IRQ_GPIO_Port GPIOC
+#define FLASH_CS_Pin GPIO_PIN_0
+#define FLASH_CS_GPIO_Port GPIOB
+#define LCD_BL_Pin GPIO_PIN_1
+#define LCD_BL_GPIO_Port GPIOB
 #define DISP_SCK_Pin GPIO_PIN_10
 #define DISP_SCK_GPIO_Port GPIOB
 #define DISP_CS_Pin GPIO_PIN_12
 #define DISP_CS_GPIO_Port GPIOB
+#define NRF_CE_Pin GPIO_PIN_6
+#define NRF_CE_GPIO_Port GPIOB
+#define NRF_CS_Pin GPIO_PIN_7
+#define NRF_CS_GPIO_Port GPIOB
+#define NRF_IRQ_Pin GPIO_PIN_8
+#define NRF_IRQ_GPIO_Port GPIOB
 #define DISP_PWM_Pin GPIO_PIN_9
 #define DISP_PWM_GPIO_Port GPIOB
 
