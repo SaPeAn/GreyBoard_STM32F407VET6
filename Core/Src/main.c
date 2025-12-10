@@ -15,24 +15,89 @@
   *
   ******************************************************************************
   */
+#define  AVER_PERIOD    30
 /* USER CODE END Header */
 /* Includes ------------------------------------------------------------------*/
 #include "main.h"
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
-
 #include "ILI9488.h"
 #include "bitmaps.h"
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include "common.h"
+#include "ringbuf.h"
+#include "scheduler.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
 /* USER CODE BEGIN PTD */
+typedef union{
+	uint16_t array[8];
+	struct{
+		uint16_t batlvl;
+		uint16_t joy;
+		uint16_t jox;
+		uint16_t AN3;
+		uint16_t tmpr;
+		uint16_t vref;
+		uint16_t vbat;
+		uint16_t ANX;
+	};
+}ADCdat_t;
+
+
+typedef struct
+{
+  int batlvl;
+  int batlvl_prev;
+  int jox;
+  int jox_prev;
+  int joy;
+  int joy_prev;
+  int tmpr;
+  int tmpr_prev;
+  int vref;
+  int vref_prev;
+}ADCaverdat_t;
+
+typedef struct
+{
+  uint8_t joyx[128];
+  uint8_t joyx_prev[128];
+  uint8_t joyy[128];
+  uint8_t joyy_prev[128];
+  uint8_t Vbat[128];
+  uint8_t Vbat_prev[128];
+  uint8_t Vpowsup[128];
+  uint8_t Vpowsup_prev[128];
+  uint8_t Temper[128];
+  uint8_t Temper_prev[128];
+  uint8_t UART_string[1024];
+  uint8_t UART_string_prev[1024];
+  uint8_t Seconds[128];
+  uint8_t Seconds_prev[128];
+}DispDat_t;
+
 
 /* USER CODE END PTD */
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
+RINGBUF_t UartRXbuf;
+uint8_t rx_buf[1024] = {0};
+uint8_t temp_byte;
+DispDat_t temp_str = {0};
+
+ADCdat_t ADC_data;
+uint8_t temp_byte;
+ADCaverdat_t ADC_averdata;
+
+uint32_t summ_counter = 0;
+uint32_t adc_complete = 1;
+uint32_t adc_summcomplete = 0;
 
 /* USER CODE END PD */
 
@@ -83,6 +148,151 @@ static void MX_USB_OTG_FS_PCD_Init(void);
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
+int _write(int file, char *ptr, int len)
+{
+  (void)file;
+  int DataIdx;
+
+  for (DataIdx = 0; DataIdx < len; DataIdx++)
+  {
+	  ITM_SendChar(*ptr++);
+  }
+  return len;
+}
+
+void UART_handler(void)
+{
+	static uint32_t temp_tick = 0;
+	static uint16_t buf_len = 0;
+	static uint16_t buf_len_prev = 0;
+
+	RingBuf_Available(&buf_len, &UartRXbuf);
+	if(buf_len)
+	{
+		if(buf_len_prev != buf_len)
+		{
+			buf_len_prev = buf_len;
+			temp_tick = HAL_GetTick();
+		}
+		if((HAL_GetTick() - temp_tick) > 5)
+		{
+			RingBuf_DataRead(temp_str.UART_string, buf_len, &UartRXbuf);
+			temp_str.UART_string[buf_len] = '\0';
+			HAL_UART_Transmit_IT(&huart1, (uint8_t*)"OK!\n", 5);
+		}
+	}
+}
+
+void ADC_handler(void)
+{
+	static int Vtemper = 0;
+	static int Temperature = 0;
+	static int joyVoltX = 0;
+	static int joyVoltY = 0;
+	static int Vbattery = 0;
+	static int Vpower = 0;
+
+	if(adc_summcomplete)
+	{
+		ADC_averdata.batlvl /= summ_counter;
+		ADC_averdata.jox /= summ_counter;
+		ADC_averdata.joy /= summ_counter;
+		ADC_averdata.tmpr /= summ_counter;
+		ADC_averdata.vref /= summ_counter;
+
+		if(ADC_averdata.vref == 0) ADC_averdata.vref = 1;
+
+		joyVoltX = (ADC_averdata.jox * 1210) / ADC_averdata.vref;
+		sprintf((char*)temp_str.joyx, "Jx: %d.%02dV", joyVoltX/1000, (joyVoltX%1000)/10);
+		joyVoltY = (ADC_averdata.joy * 1210) / ADC_averdata.vref;
+		sprintf((char*)temp_str.joyy, "Jy: %d.%02dV", joyVoltY/1000, (joyVoltY%1000)/10);
+		Vbattery = (ADC_averdata.batlvl * 1853) / ADC_averdata.vref;
+		sprintf((char*)temp_str.Vbat, "Vb: %d.%02dV", Vbattery/1000, (Vbattery%1000)/10);
+		Vpower = (4095 * 1210) / ADC_averdata.vref;
+		sprintf((char*)temp_str.Vpowsup, "Vp: %d.%02dV", Vpower/1000, (Vpower%1000)/10);
+		Vtemper = (ADC_averdata.tmpr * 12100) / ADC_averdata.vref; // x10 mV
+		Temperature = 25 + (Vtemper - 7600) / 25;
+		sprintf((char*)temp_str.Temper, "T:  %d*C",Temperature);
+
+		ADC_averdata.batlvl = 0;
+		ADC_averdata.jox = 0;
+		ADC_averdata.joy = 0;
+		ADC_averdata.tmpr = 0;
+		ADC_averdata.vref = 0;
+
+	    joystick.ox = (uint8_t)clamp(((joyVoltX * 10) / 129), 0, 255);
+	    joystick.oy = (uint8_t)clamp(((joyVoltY* 10) / 129), 0, 255);
+	    Ubat = (uint8_t)clamp(((Vbattery * 10) / 164), 0, 255);
+
+		adc_summcomplete = 0;
+		summ_counter = 0;
+	}
+
+	if(adc_complete)
+	{
+		HAL_ADC_Start_DMA(&hadc1, (uint32_t*)ADC_data.array, 5);
+		adc_complete = 0;
+	}
+}
+
+void displayparams(void)
+{
+	static char tempstring[10][100];
+	static char tempstring_prev[10][100];
+	static uint16_t text_color = COLOR_GREEN;
+
+	sprintf(tempstring[0], "jx%03u jy%03u BAT%03u<%d>", joystick.ox, joystick.oy, Ubat, batlvl);
+	sprintf(tempstring[1], "PWM%03u", brightPWM);
+	if(strncmp(tempstring[0], tempstring_prev[0], 10) || strncmp(tempstring[1], tempstring_prev[1], 10))
+	{
+		draw_fast_string(125,0, text_color, COLOR_BLACK, "8 bit parameters");
+		draw_fast_string(125,15, text_color, COLOR_BLACK, tempstring[0]);
+		draw_fast_string(125,30, text_color, COLOR_BLACK, tempstring[1]);
+		strncpy(tempstring_prev[0], tempstring[0], 100);
+		strncpy(tempstring_prev[1], tempstring[1], 100);
+	}
+
+
+
+	//if(strncmp((char*)temp_str.joyx, (char*)temp_str.joyx_prev, 10))
+	{
+		draw_fast_string(0, 0, text_color, COLOR_BLACK, (char*)temp_str.joyx);
+		strncpy((char*)temp_str.joyx_prev, (char*)temp_str.joyx, 128);
+	}
+	//if(strncmp((char*)temp_str.joyy, (char*)temp_str.joyy_prev, 10))
+	{
+		draw_fast_string(0, 15, text_color, COLOR_BLACK, (char*)temp_str.joyy);
+		strncpy((char*)temp_str.joyy_prev, (char*)temp_str.joyy, 128);
+	}
+	//if(strncmp((char*)temp_str.Vbat, (char*)temp_str.Vbat_prev, 10))
+	{
+		draw_fast_string(0, 30, text_color, COLOR_BLACK, (char*)temp_str.Vbat);
+		strncpy((char*)temp_str.Vbat_prev, (char*)temp_str.Vbat, 128);
+	}
+	//if(strncmp((char*)temp_str.Vpowsup, (char*)temp_str.Vpowsup_prev, 10))
+	{
+		draw_fast_string(0, 45, text_color, COLOR_BLACK, (char*)temp_str.Vpowsup);
+		strncpy((char*)temp_str.Vpowsup_prev, (char*)temp_str.Vpowsup, 128);
+	}
+	//if(strncmp((char*)temp_str.Temper, (char*)temp_str.Temper_prev, 10))
+	{
+		draw_fast_string(0, 60, text_color, COLOR_BLACK, (char*)temp_str.Temper);
+		strncpy((char*)temp_str.Temper_prev, (char*)temp_str.Temper, 128);
+	}
+
+	sprintf((char*)temp_str.Seconds, "%02lu:%02lu:%02lu", (HAL_GetTick()/1000)/3600, ((HAL_GetTick()/1000)%3600)/60, (HAL_GetTick()/1000)%60);
+	//if(strncmp((char*)temp_str.Seconds, (char*)temp_str.Seconds_prev, 10))
+	{
+		draw_fast_string(0, 75, text_color, COLOR_BLACK, (char*)temp_str.Seconds);
+		strncpy((char*)temp_str.Seconds_prev, (char*)temp_str.Seconds, 128);
+	}
+	//if(strncmp((char*)temp_str.UART_string, (char*)temp_str.UART_string_prev, 10))
+	{
+		draw_fast_string(0, 90, text_color, COLOR_BLACK, (char*)temp_str.UART_string);
+		strncpy((char*)temp_str.UART_string_prev, (char*)temp_str.UART_string, 1024);
+	}
+}
+
 
 /* USER CODE END 0 */
 
@@ -131,24 +341,37 @@ int main(void)
   HAL_TIM_PWM_Start(&htim11, TIM_CHANNEL_1);
 
   lcd_init();
+  fill_rectangle(0, 0, WIDTH, HEIGHT, COLOR_BLACK);
+  RingBuf_Init(rx_buf, 1024, 1, &UartRXbuf);
+  HAL_Delay(250);
+  commoninit();
 
-    fill_rectangle(0, 0, WIDTH, HEIGHT, COLOR_BLACK);
+
   /* USER CODE END 2 */
 
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
+
+  //-------------scheduler functions-------------
+
+  SchedAddEvent(displayparams, 100);
+
+  //---------------------------------------------
+
+  HAL_UART_Receive_IT(&huart1, &temp_byte, 1);
+  HAL_ADC_Start_DMA(&hadc1, (uint32_t*)ADC_data.array, 7);
+
   while (1)
   {
+	  //check_btn_jstk();
+	  //batcheck();
+	  UART_handler();
+      SchedEventProcess();
+	  ADC_handler();
+	  //pressbutton(&B1, decbright);
+	  //pressbutton(&B2, incbright);
+	  //pressbutton(&B3, ShutDown);
 
-	  //the image
-	  //draw_bitmap(112, 32, 1, smiley);
-
-	  draw_string(0, 0, COLOR_LIGHTBLUE, 2, "Hello World");
-	  HAL_Delay(500);
-	  //draw_bitmap(112, 32, 1, heart);
-	  draw_string(0, 0, COLOR_LIGHTBLUE, 2, "Hello World");
-
-	  HAL_Delay(500);
 
     /* USER CODE END WHILE */
 
@@ -227,13 +450,13 @@ static void MX_ADC1_Init(void)
   hadc1.Init.ClockPrescaler = ADC_CLOCK_SYNC_PCLK_DIV4;
   hadc1.Init.Resolution = ADC_RESOLUTION_12B;
   hadc1.Init.ScanConvMode = ENABLE;
-  hadc1.Init.ContinuousConvMode = DISABLE;
+  hadc1.Init.ContinuousConvMode = ENABLE;
   hadc1.Init.DiscontinuousConvMode = DISABLE;
   hadc1.Init.ExternalTrigConvEdge = ADC_EXTERNALTRIGCONVEDGE_NONE;
   hadc1.Init.ExternalTrigConv = ADC_SOFTWARE_START;
   hadc1.Init.DataAlign = ADC_DATAALIGN_RIGHT;
   hadc1.Init.NbrOfConversion = 7;
-  hadc1.Init.DMAContinuousRequests = DISABLE;
+  hadc1.Init.DMAContinuousRequests = ENABLE;
   hadc1.Init.EOCSelection = ADC_EOC_SINGLE_CONV;
   if (HAL_ADC_Init(&hadc1) != HAL_OK)
   {
@@ -244,7 +467,7 @@ static void MX_ADC1_Init(void)
   */
   sConfig.Channel = ADC_CHANNEL_0;
   sConfig.Rank = 1;
-  sConfig.SamplingTime = ADC_SAMPLETIME_56CYCLES;
+  sConfig.SamplingTime = ADC_SAMPLETIME_28CYCLES;
   if (HAL_ADC_ConfigChannel(&hadc1, &sConfig) != HAL_OK)
   {
     Error_Handler();
@@ -290,6 +513,7 @@ static void MX_ADC1_Init(void)
   */
   sConfig.Channel = ADC_CHANNEL_VREFINT;
   sConfig.Rank = 6;
+  sConfig.SamplingTime = ADC_SAMPLETIME_56CYCLES;
   if (HAL_ADC_ConfigChannel(&hadc1, &sConfig) != HAL_OK)
   {
     Error_Handler();
@@ -299,6 +523,7 @@ static void MX_ADC1_Init(void)
   */
   sConfig.Channel = ADC_CHANNEL_VBAT;
   sConfig.Rank = 7;
+  sConfig.SamplingTime = ADC_SAMPLETIME_28CYCLES;
   if (HAL_ADC_ConfigChannel(&hadc1, &sConfig) != HAL_OK)
   {
     Error_Handler();
@@ -616,7 +841,7 @@ static void MX_DMA_Init(void)
 
   /* DMA interrupt init */
   /* DMA1_Stream4_IRQn interrupt configuration */
-  HAL_NVIC_SetPriority(DMA1_Stream4_IRQn, 0, 0);
+  HAL_NVIC_SetPriority(DMA1_Stream4_IRQn, 3, 0);
   HAL_NVIC_EnableIRQ(DMA1_Stream4_IRQn);
   /* DMA2_Stream0_IRQn interrupt configuration */
   HAL_NVIC_SetPriority(DMA2_Stream0_IRQn, 2, 0);
@@ -694,7 +919,48 @@ static void MX_GPIO_Init(void)
 }
 
 /* USER CODE BEGIN 4 */
+void HAL_IncTick(void)
+{
+  uwTick += uwTickFreq;
+  SchedPeriodIncr();
+}
 
+void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
+{
+  if(huart == &huart1)
+  {
+    RingBuf_BytePut(temp_byte, &UartRXbuf);
+    HAL_UART_Receive_IT (&huart1, &temp_byte, 1);
+  }
+}
+
+void HAL_UART_TxCpltCallback(UART_HandleTypeDef *huart)
+{
+  if(huart == &huart1)
+  {
+  }
+}
+
+void HAL_ADC_ConvCpltCallback(ADC_HandleTypeDef* hadc)
+{
+  if(hadc->Instance == ADC1)
+  {
+    if(summ_counter < AVER_PERIOD)
+    {
+      ADC_averdata.batlvl += (uint32_t) ADC_data.batlvl;
+      ADC_averdata.jox += (uint32_t) ADC_data.jox;
+      ADC_averdata.joy += (uint32_t) ADC_data.joy;
+      ADC_averdata.tmpr += (uint32_t) ADC_data.tmpr;
+      ADC_averdata.vref += (uint32_t) ADC_data.vref;
+      summ_counter++;
+    }
+    else
+    {
+      adc_summcomplete = 1;
+    }
+    adc_complete = 1;
+  }
+}
 /* USER CODE END 4 */
 
 /**

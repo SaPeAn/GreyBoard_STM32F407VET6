@@ -69,6 +69,8 @@ void Error_Handler(void);
 #define DISP_MISO_GPIO_Port GPIOC
 #define DISP_MOSI_Pin GPIO_PIN_3
 #define DISP_MOSI_GPIO_Port GPIOC
+#define V_BAT_Pin GPIO_PIN_0
+#define V_BAT_GPIO_Port GPIOA
 #define SPI1_CS_Pin GPIO_PIN_4
 #define SPI1_CS_GPIO_Port GPIOA
 #define TOUCH_CS_Pin GPIO_PIN_4
